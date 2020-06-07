@@ -18,6 +18,8 @@ import torchvision.utils as vutils
 import seaborn as sns
 import torch.nn.init as init
 import pickle
+import logging
+from datetime import datetime
 
 # Custom Libraries
 import utils
@@ -32,6 +34,14 @@ sns.set_style('darkgrid')
 def main(args, ITE=0):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     reinit = True if args.prune_type=="reinit" else False
+
+    #set up log file
+    LOG_FILE = datetime.now().strftime('./logs/log_%H_%M_%S_%d_%m_%Y.log')
+    
+    logging.basicConfig(filename=LOG_FILE, format='[%(levelname)s][%(asctime)s]: %(message)s', level='INFO', datefmt='%H:%M:%S')
+                        
+    print('log file saved in {}'.format(LOG_FILE))
+
 
     # Data Loader
     transform=transforms.Compose([transforms.ToTensor(),transforms.Normalize((0.1307,), (0.3081,))])
@@ -113,9 +123,12 @@ def main(args, ITE=0):
     step = 0
     all_loss = np.zeros(args.end_iter,float)
     all_accuracy = np.zeros(args.end_iter,float)
+    
 
+    accuracy_list = []
 
     for _ite in range(args.start_iter, ITERATION):
+        initial_state_dict = copy.deepcopy(model.state_dict())
         if not _ite == 0:
             prune_by_percentile(args.prune_percent, resample=resample, reinit=reinit)
             if reinit:
@@ -145,19 +158,20 @@ def main(args, ITE=0):
             else:
                 original_initialization(mask, initial_state_dict)
             optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-4)
-        print(f"\n--- Pruning Level [{ITE}:{_ite}/{ITERATION}]: ---")
+        logging.info(f"\n--- Pruning Level [{ITE}:{_ite}/{ITERATION}]: ---")
 
         # Print the table of Nonzeros in each layer
         comp1 = utils.print_nonzeros(model)
         comp[_ite] = comp1
         pbar = tqdm(range(args.end_iter))
 
+        
         for iter_ in pbar:
 
             # Frequency for Testing
             if iter_ % args.valid_freq == 0:
                 accuracy = test(model, test_loader, criterion)
-
+                accuracy_list.append(accuracy)
                 # Save Weights
                 if accuracy > best_accuracy:
                     best_accuracy = accuracy
@@ -176,6 +190,8 @@ def main(args, ITE=0):
 
         writer.add_scalar('Accuracy/test', best_accuracy, comp1)
         bestacc[_ite]=best_accuracy
+        
+        logging.info(f'Best accuracy : {best_accuracy:.2f}')
 
         # Plotting Loss (Training), Accuracy (Testing), Iteration Curve
         #NOTE Loss is computed for every iteration while Accuracy is computed only for every {args.valid_freq} iterations. Therefore Accuracy saved is constant during the uncomputed iterations.
@@ -206,6 +222,7 @@ def main(args, ITE=0):
         all_loss = np.zeros(args.end_iter,float)
         all_accuracy = np.zeros(args.end_iter,float)
 
+    logging.info('Accuracy list: {}'.format(accuracy_list))
     # Dumping Values for Plotting
     utils.checkdir(f"{os.getcwd()}/dumps/lt/{args.arch_type}/{args.dataset}/")
     comp.dump(f"{os.getcwd()}/dumps/lt/{args.arch_type}/{args.dataset}/{args.prune_type}_compression.dat")
@@ -400,7 +417,7 @@ if __name__=="__main__":
     parser.add_argument("--lr",default= 1.2e-3, type=float, help="Learning rate")
     parser.add_argument("--batch_size", default=60, type=int)
     parser.add_argument("--start_iter", default=0, type=int)
-    parser.add_argument("--end_iter", default=100, type=int)
+    parser.add_argument("--end_iter", default=5000, type=int)
     parser.add_argument("--print_freq", default=1, type=int)
     parser.add_argument("--valid_freq", default=1, type=int)
     parser.add_argument("--resume", action="store_true")
